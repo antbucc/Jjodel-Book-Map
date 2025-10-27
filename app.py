@@ -5,7 +5,7 @@ import requests
 
 app = Flask(__name__)
 
-CSV_URL = "https://docs.google.com/spreadsheets/d/e/.../pub?output=csv"  # or GitHub raw link
+CSV_URL = "https://drive.google.com/file/d/1ifz26EtJPuEyOlZUAzkwkYBNF6O3ASBP/view?usp=sharing"  # or GitHub raw link
 
 @app.route("/")
 def index():
