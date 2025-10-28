@@ -1,5 +1,9 @@
 Flask>=2.3
 plotly>=5.10
+<<<<<<< HEAD
 pandas>=2.0,<3.0
+=======
+pandas>=2.0
+>>>>>>> 83fd5099cce26accbe4361aa31e08b4809356cc2
 requests>=2.28
 gunicorn>=20.0
