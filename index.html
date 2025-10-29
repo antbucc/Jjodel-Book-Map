@@ -2,42 +2,60 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <title>MDE + Jjodel Learning Flow</title>
+  <title>MDE + Jjodel Learning Flow (Sections & Chapters)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
   <style>
-    body{font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;margin:1.5rem}
-    #chart{width:100%;height:80vh;border:1px dashed #ddd;border-radius:10px}
-    .row{margin:.5rem 0}
+    :root { --pad: 1.2rem; }
+    body{font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;margin:var(--pad)}
+    #chart{width:100%;height:78vh;border:1px dashed #ddd;border-radius:10px}
+    .row{display:flex;gap:.75rem;flex-wrap:wrap;align-items:center;margin:.4rem 0}
+    .row > *{flex:0 0 auto}
+    input[type="text"]{min-width:36ch;width:52ch;max-width:100%}
     label{font-weight:600}
-    input{width:100%}
-    button{padding:.5rem .8rem;margin-top:.25rem}
-    pre{white-space:pre-wrap;background:#f6f8fa;padding:.5rem;border-radius:6px}
+    select, input, button{padding:.4rem .6rem}
+    .help{font-size:.9rem;color:#666}
+    .status{white-space:pre-wrap;background:#f6f8fa;padding:.5rem;border-radius:6px;border:1px solid #eee;max-height:22vh;overflow:auto}
+    .spacer{flex:1}
   </style>
 </head>
 <body>
-  <h1>MDE + Jjodel — Chapter-level Sankey</h1>
+  <h1>MDE + Jjodel — Learning Flow</h1>
 
   <div class="row">
-    <label>CSV URL (Google Sheets “Publish to web → CSV” or GitHub raw):</label>
-    <input id="csvUrl" placeholder="https://.../pub?output=csv">
+    <label for="csvUrl">CSV URL:</label>
+    <input id="csvUrl" type="text"
+           value="https://docs.google.com/spreadsheets/d/e/2PACX-1vRQPOCRqfywb6OCQUTFdtmge-XjXf__IZQwu86KFVFexFyjDYM-BMvJj5Xs-DWQxbFMHm5zs19E3WYX/pub?gid=407473631&single=true&output=csv">
+    <label for="viewMode">View:</label>
+    <select id="viewMode">
+      <option value="sections">Sections (deep)</option>
+      <option value="chapters">Chapters (aggregated)</option>
+    </select>
+    <label for="minWeight">Min link weight:</label>
+    <input id="minWeight" type="number" min="1" step="1" value="1" style="width:6ch">
+    <button id="loadBtn">Load</button>
+    <div class="spacer"></div>
   </div>
-  <button id="loadBtn">Load</button>
-  <pre id="status"></pre>
+  <div class="row help">
+    <div>Tip: <em>Sections view</em> draws edges from each <code>prereq</code> ID → the section’s <code>id</code>. Switch to <em>Chapters</em> to see aggregated flows.</div>
+  </div>
+
   <div id="chart"></div>
+  <div class="row">
+    <div class="status" id="status"></div>
+  </div>
 
 <script>
-const DEFAULT_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRQPOCRqfywb6OCQUTFdtmge-XjXf__IZQwu86KFVFexFyjDYM-BMvJj5Xs-DWQxbFMHm5zs19E3WYX/pub?output=csv";
-document.getElementById('csvUrl').value = DEFAULT_CSV_URL;
-
+/** ---------- Utilities ---------- **/
 async function fetchCSV(url){
-  const res = await fetch(url, {cache:"no-store"});
+  const res = await fetch(url, {cache: "no-store"});
   if(!res.ok) throw new Error(`Fetch ${res.status} ${res.statusText}`);
   return await res.text();
 }
 function parseCSV(text){
   const lines = text.trim().split(/\r?\n/);
-  const headers = lines.shift().split(",").map(h=>h.trim());
+  if(lines.length === 0) return [];
+  const headers = lines.shift().split(",").map(h=>h.trim().toLowerCase());
   return lines.map(line=>{
     const cells = line.split(",").map(c=>c.trim());
     const row = {};
@@ -45,64 +63,161 @@ function parseCSV(text){
     return row;
   });
 }
-function chapterLabel(ch){
-  ch=String(ch||"");
-  const parts=ch.split(" ",2);
-  return `Ch${parts[0]} ${(parts[1]||"").slice(0,32)}`.trim();
+function short(str, n=36){ str=String(str||""); return str.length>n?str.slice(0,n-1)+"…":str; }
+function uniq(arr){ return Array.from(new Set(arr)); }
+
+/** ---------- Build graphs ---------- **/
+/* Expect CSV columns: id, chapter, title, part, prereq */
+function normalizeRows(rows){
+  // Ensure keys and clean values
+  return rows.map(r=>{
+    const id = String(r.id||"").trim();
+    const chapter = String(r.chapter||"").trim();
+    const title = String(r.title||"").trim();
+    const part = String(r.part||"").trim();
+    const prereq = String(r.prereq||"").trim();
+    return { id, chapter, title, part, prereq };
+  }).filter(r=>r.id && r.chapter);
 }
-function buildSankey(rows){
-  const chapters=[];
-  rows.forEach(r=>{
-    const ch=(r.chapter||"").trim();
-    if(ch && !chapters.includes(ch)) chapters.push(ch);
+
+/* Build SECTION-level graph: nodes are sections; links from prereq IDs -> section ID */
+function buildSectionGraph(rows, minWeight=1){
+  const byId = {};
+  rows.forEach(r=>byId[r.id]=r);
+
+  // Node list
+  const nodes = rows.map(r=>{
+    const lbl = `${r.id} ${short(r.title || r.chapter)}`;
+    return { key: r.id, label: lbl, chapter: r.chapter, part: r.part };
   });
-  const idx=Object.fromEntries(chapters.map((c,i)=>[c,i]));
-  const id2ch={};
+
+  // Edges
+  const counts = new Map(); // key "src||dst" -> weight
   rows.forEach(r=>{
-    const id=(r.id||"").trim(), ch=(r.chapter||"").trim();
-    if(id && ch) id2ch[id]=ch;
-  });
-  const counts={};
-  rows.forEach(r=>{
-    const dst=(r.chapter||"").trim();
-    const pre=(r.prereq||"").trim();
-    if(pre && pre.toLowerCase()!=="nan"){
-      pre.split(",").map(s=>s.trim()).filter(Boolean).forEach(p=>{
-        const src=id2ch[p];
-        if(src && src!==dst){
-          const key=src+"→"+dst;
-          counts[key]=(counts[key]||0)+1;
-        }
+    const dst = r.id;
+    if(!r.prereq) return;
+    r.prereq.split(",")
+      .map(s=>s.trim()).filter(Boolean)
+      .forEach(src=>{
+        if(!byId[src]) return; // ignore unknown ids
+        if(src === dst) return; // avoid self-loops
+        const k = src + "||" + dst;
+        counts.set(k, (counts.get(k)||0) + 1);
       });
-    }
   });
-  const sources=[],targets=[],values=[];
-  Object.entries(counts).forEach(([k,v])=>{
-    const [a,b]=k.split("→");
-    if(a in idx && b in idx){sources.push(idx[a]);targets.push(idx[b]);values.push(v);}
+
+  // Filter and convert to arrays
+  const links = [];
+  for(const [k, w] of counts.entries()){
+    if(w < minWeight) continue;
+    const [src, dst] = k.split("||");
+    links.push({ source: src, target: dst, value: w });
+  }
+
+  // Map ids to indices for Sankey
+  const indexByKey = Object.fromEntries(nodes.map((n,i)=>[n.key, i]));
+
+  const source = [], target = [], value = [];
+  links.forEach(e=>{
+    if(indexByKey[e.source] == null || indexByKey[e.target] == null) return;
+    source.push(indexByKey[e.source]);
+    target.push(indexByKey[e.target]);
+    value.push(e.value);
   });
-  if(values.length===0 && chapters.length){sources.push(0);targets.push(0);values.push(1);}
-  return{
-    data:[{type:"sankey",arrangement:"snap",
-      node:{label:chapters.map(chapterLabel),pad:18,thickness:16},
-      link:{source:sources,target:targets,value:values}}],
-    layout:{title:"MDE + Jjodel Learning Flow (Static CSV)"},
-    config:{responsive:true}
-  };
+
+  const labels = nodes.map(n=>n.label);
+  return { labels, source, target, value };
 }
+
+/* Build CHAPTER-level graph: aggregate section links by chapter */
+function buildChapterGraph(rows, minWeight=1){
+  const byId = {};
+  rows.forEach(r=>byId[r.id]=r);
+
+  // All chapter names (preserve order of appearance)
+  const chapters = uniq(rows.map(r=>r.chapter));
+
+  // Aggregate edges by chapter
+  const agg = new Map(); // key "ChapA||ChapB" -> weight
+  rows.forEach(r=>{
+    const dstId = r.id;
+    const dstChap = r.chapter;
+    if(!r.prereq) return;
+    r.prereq.split(",").map(s=>s.trim()).filter(Boolean).forEach(srcId=>{
+      const src = byId[srcId];
+      if(!src) return;
+      const srcChap = src.chapter;
+      if(!srcChap || !dstChap) return;
+      if(srcChap === dstChap) return; // optional: skip intra-chapter for clearer cross flows
+      const k = srcChap + "||" + dstChap;
+      agg.set(k, (agg.get(k)||0)+1);
+    });
+  });
+
+  const nodes = chapters.map(ch => ({ key: ch, label: short(ch, 42) }));
+  const indexByKey = Object.fromEntries(nodes.map((n,i)=>[n.key, i]));
+
+  const source=[], target=[], value=[];
+  for(const [k, w] of agg.entries()){
+    if(w < minWeight) continue;
+    const [a,b] = k.split("||");
+    if(indexByKey[a]==null || indexByKey[b]==null) continue;
+    source.push(indexByKey[a]); target.push(indexByKey[b]); value.push(w);
+  }
+  const labels = nodes.map(n=>n.label);
+  // Keep graph non-empty
+  if(value.length===0 && labels.length){
+    source.push(0); target.push(0); value.push(1);
+  }
+  return { labels, source, target, value };
+}
+
+/** ---------- Plot ---------- **/
+function plotSankey(graph, title){
+  const data = [{
+    type: "sankey",
+    arrangement: "snap",
+    node: { label: graph.labels, pad: 18, thickness: 16 },
+    link: { source: graph.source, target: graph.target, value: graph.value }
+  }];
+  const layout = { title, margin: {l:10,r:10,t:40,b:10} };
+  const config = { responsive: true };
+  Plotly.newPlot("chart", data, layout, config);
+}
+
+/** ---------- Controller ---------- **/
 async function run(){
-  const url=document.getElementById("csvUrl").value.trim();
-  const status=document.getElementById("status");
-  status.textContent="Loading CSV...";
+  const status = document.getElementById("status");
+  const url = document.getElementById("csvUrl").value.trim();
+  const view = document.getElementById("viewMode").value;
+  const minWeight = parseInt(document.getElementById("minWeight").value || "1", 10);
+
+  status.textContent = "Loading CSV...";
   try{
-    const text=await fetchCSV(url);
-    const rows=parseCSV(text);
-    const fig=buildSankey(rows);
-    Plotly.newPlot("chart",fig.data,fig.layout,fig.config);
-    status.textContent="Loaded from: "+url;
-  }catch(e){status.textContent="Error: "+e.message;}
+    const text = await fetchCSV(url);
+    const rows = normalizeRows(parseCSV(text));
+
+    // Basic sanity checks
+    const required = ["id","chapter","prereq"];
+    const hasReq = rows.length>0 && required.every(k => Object.prototype.hasOwnProperty.call(rows[0], k));
+    if(!hasReq) throw new Error("CSV must include columns: id, chapter, prereq (title, part optional).");
+
+    if(view === "sections"){
+      const g = buildSectionGraph(rows, minWeight);
+      plotSankey(g, "Section-level (deep) flows");
+      status.textContent = `Loaded ${rows.length} sections from:\n${url}\nLinks: ${g.value.length} (min weight ≥ ${minWeight})`;
+    }else{
+      const g = buildChapterGraph(rows, minWeight);
+      plotSankey(g, "Chapter-level (aggregated) flows");
+      status.textContent = `Loaded ${rows.length} sections (aggregated by chapter) from:\n${url}\nLinks: ${g.value.length} (min weight ≥ ${minWeight})`;
+    }
+  }catch(e){
+    status.textContent = "Error: " + e.message;
+  }
 }
-document.getElementById("loadBtn").addEventListener("click",run);
+
+document.getElementById("loadBtn").addEventListener("click", run);
+// Auto-load on first visit with the prefilled CSV
 window.addEventListener("DOMContentLoaded", run);
 </script>
 </body>
