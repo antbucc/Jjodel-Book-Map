@@ -1,7 +1,0 @@
-id,chapter,prereq,title,part,section,writers,pages,related,deadline
-1.1,1 Introduction,,Motivation for the Book,I Foundations,1.1,,,,
-1.2,1 Introduction,1.1,What is Model-Driven Engineering?,I Foundations,1.2,,,,
-2.1,2 Core Principles of MDE,1.2,Abstraction and Models,I Foundations,2.1,Antonio B.,,,,
-2.5,2 Core Principles of MDE,2.1,Abstract and Concrete Syntax,I Foundations,2.5,Malvina,,,,
-4.4,4 Getting Started with Jjodel,2.5,Creating Your First Syntax,II Jjodel in Action,4.4,Juri,,,,
-11.1,11 Positional Notations,5.4,Topological and Positional Notations,III Advanced Topics,11.1,,,,

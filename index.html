@@ -20,15 +20,16 @@
 
   <div class="row">
     <label>CSV URL (Google Sheets “Publish to web → CSV” or GitHub raw):</label>
-    <input id="csvUrl" placeholder="https://drive.google.com/file/d/1ifz26EtJPuEyOlZUAzkwkYBNF6O3ASBP/view?usp=sharing?output=csv">
-    <!-- Optional: prefill your CSV -->
-    <!-- <script>document.getElementById('csvUrl').value='https://docs.google.com/spreadsheets/d/e/.../pub?output=csv'</script> -->
+    <input id="csvUrl" placeholder="https://.../pub?output=csv">
   </div>
   <button id="loadBtn">Load</button>
   <pre id="status"></pre>
   <div id="chart"></div>
 
 <script>
+const DEFAULT_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRQPOCRqfywb6OCQUTFdtmge-XjXf__IZQwu86KFVFexFyjDYM-BMvJj5Xs-DWQxbFMHm5zs19E3WYX/pub?output=csv";
+document.getElementById('csvUrl').value = DEFAULT_CSV_URL;
+
 async function fetchCSV(url){
   const res = await fetch(url, {cache:"no-store"});
   if(!res.ok) throw new Error(`Fetch ${res.status} ${res.statusText}`);
@@ -39,7 +40,7 @@ function parseCSV(text){
   const headers = lines.shift().split(",").map(h=>h.trim());
   return lines.map(line=>{
     const cells = line.split(",").map(c=>c.trim());
-    const row={};
+    const row = {};
     headers.forEach((h,i)=>row[h]=cells[i]??"");
     return row;
   });
@@ -58,7 +59,7 @@ function buildSankey(rows){
   const idx=Object.fromEntries(chapters.map((c,i)=>[c,i]));
   const id2ch={};
   rows.forEach(r=>{
-    const id=(r.id||"").trim(),ch=(r.chapter||"").trim();
+    const id=(r.id||"").trim(), ch=(r.chapter||"").trim();
     if(id && ch) id2ch[id]=ch;
   });
   const counts={};
@@ -85,7 +86,8 @@ function buildSankey(rows){
     data:[{type:"sankey",arrangement:"snap",
       node:{label:chapters.map(chapterLabel),pad:18,thickness:16},
       link:{source:sources,target:targets,value:values}}],
-    layout:{title:"MDE + Jjodel Learning Flow (Static CSV)"}
+    layout:{title:"MDE + Jjodel Learning Flow (Static CSV)"},
+    config:{responsive:true}
   };
 }
 async function run(){
@@ -96,11 +98,12 @@ async function run(){
     const text=await fetchCSV(url);
     const rows=parseCSV(text);
     const fig=buildSankey(rows);
-    Plotly.newPlot("chart",fig.data,fig.layout,{responsive:true});
+    Plotly.newPlot("chart",fig.data,fig.layout,fig.config);
     status.textContent="Loaded from: "+url;
   }catch(e){status.textContent="Error: "+e.message;}
 }
 document.getElementById("loadBtn").addEventListener("click",run);
+window.addEventListener("DOMContentLoaded", run);
 </script>
 </body>
 </html>
